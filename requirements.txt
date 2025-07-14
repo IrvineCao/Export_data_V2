@@ -1,0 +1,7 @@
+streamlit
+numpy
+pandas
+singlestoredb
+SQLAlchemy
+sqlalchemy-singlestoredb
+python-dotenv

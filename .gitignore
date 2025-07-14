@@ -1,0 +1,13 @@
+# Bỏ qua các tệp cấu hình môi trường
+.env
+
+# Bỏ qua các thư mục cache của Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Bỏ qua các tệp hệ điều hành
+.DS_Store
+Thumbs.db
+activity_log.csv
+279373176_113709667987056_4673232334138922907_n.jpg
