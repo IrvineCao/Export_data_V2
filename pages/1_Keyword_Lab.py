@@ -1,78 +1,59 @@
+# pages/1_Keyword_Lab.py
 import streamlit as st
-from pages.base_page import Page 
+from utils.session import initialize_session
+from utils.managers import DataManager, ExportProcessManager
+from utils.ui import (
+    create_input_form, 
+    display_user_message, 
+    display_data_summary_and_preview,
+    display_export_buttons,
+    display_download_section
+)
 
-class KeywordLabPage(Page):
-    """
-    Lớp này là "bộ điều khiển" cho trang Keyword Lab.
-    Nó kế thừa tất cả các manager (data, session, ui) từ lớp Page cơ sở.
-    """
-    def __init__(self):
-        # Kế thừa __init__ từ lớp cha (Page) để có sẵn các manager
-        super().__init__()
-        # Định danh duy nhất cho nguồn dữ liệu của trang này
-        self.DATA_SOURCE_KEY = 'kwl'
+# Giả sử bạn có hàm tiện ích này trong một file logic riêng
+# utils/logic.py hoặc có thể đặt nó ở đây nếu chỉ dùng cho export
+def convert_df_to_csv(df):
+    return df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
 
-    def _render_content(self):
-        """
-        Phương thức chính để dựng toàn bộ giao diện của trang.
-        """
-        st.set_page_config(page_title="Keyword Lab", layout="wide")
-        st.title("📊 Keyword Level Data Export")
-        st.markdown("---")
+st.set_page_config(page_title="Keyword Lab", layout="wide")
+initialize_session()
 
-        # VIỆC 1: DỰNG GIAO DIỆN
-        # Ủy thác việc tạo form cho UIManager.
-        # Nó chỉ nhận về kết quả người dùng nhập vào.
-        workspace_id, storefront_input, start_date, end_date, _ = self.ui_manager.create_input_form(
-            source_key=self.DATA_SOURCE_KEY
-        )
+DATA_SOURCE_KEY = 'kwl'
 
-        # VIỆC 2: XỬ LÝ TƯƠNG TÁC
-        # Gắn logic xử lý cho nút bấm.
-        if st.button("Preview Data", key=f'preview_{self.DATA_SOURCE_KEY}'):
-            self._handle_preview_click(
-                workspace_id=workspace_id,
-                storefront_input=storefront_input,
-                start_date=start_date,
-                end_date=end_date
-            )
+st.title("📊 Keyword Level Data Export")
+st.markdown("---")
 
-        # VIỆC 3: HIỂN THỊ KẾT QUẢ DỰA TRÊN STATE
-        # Chỉ hiển thị phần kết quả nếu nó thuộc về trang này.
-        if self.session_manager.get('params', {}).get('data_source') == self.DATA_SOURCE_KEY:
-            self.ui_manager.display_data_exporter(self.data_manager)
+display_user_message()
 
+workspace_id, storefront_input, start_date, end_date, _ = create_input_form(source_key=DATA_SOURCE_KEY)
 
-    def _handle_preview_click(self, workspace_id, storefront_input, start_date, end_date):
-        """
-        Đây là logic cốt lõi của trang: Xử lý khi người dùng nhấn nút.
-        """
-        # Xóa trạng thái export cũ để bắt đầu luồng mới
-        self.session_manager.clear_export_state()
+if st.button("Get Data", key=f'get_data_{DATA_SOURCE_KEY}'):
+    st.session_state.user_message = None
+    if st.session_state.params.get('data_source') != DATA_SOURCE_KEY: st.session_state.stage = 'initial'
+    process_inputs = {"workspace_id": workspace_id, "storefront_input": storefront_input, "start_date": start_date, "end_date": end_date}
+    process_manager = ExportProcessManager(DATA_SOURCE_KEY, process_inputs)
+    process_manager.run()
+    st.rerun()
 
-        # 1. Kiểm tra đầu vào
-        if not all([workspace_id, storefront_input, start_date, end_date]):
-            st.error("Vui lòng điền đầy đủ tất cả các trường.")
-            return
-
-        storefront_list = [eid.strip() for eid in storefront_input.split(',')]
-        params = {
-            "ws_id": workspace_id,
-            "storefront_ids": storefront_list,
-            "start_date": start_date.strftime("%Y-%m-%d"),
-            "end_date": end_date.strftime("%Y-%m-%d"),
-            "data_source": self.DATA_SOURCE_KEY # Đánh dấu đây là request từ trang KWL
-        }
-
-        # 2. Lưu tham số và chuyển stage sang 'loading_preview'
-        self.session_manager.set('params', params)
-        self.session_manager.set('stage', 'loading_preview')
-
-        # 3. Yêu cầu Streamlit chạy lại để hiển thị spinner và bắt đầu tải dữ liệu
+if st.session_state.params.get('data_source') == DATA_SOURCE_KEY:
+    stage = st.session_state.get('stage', 'initial')
+    if stage == 'loading_preview':
+        with st.spinner("Loading preview..."):
+            data_manager = DataManager(DATA_SOURCE_KEY)
+            df_preview = data_manager.get_data(st.session_state.params, limit=500)
+            st.session_state.df_preview = df_preview
+            st.session_state.stage = 'loaded'
         st.rerun()
-
-# --- Entry Point của trang ---
-# Code này sẽ chạy khi người dùng điều hướng đến trang "Keyword Lab"
-if __name__ == "__main__":
-    page = KeywordLabPage()
-    page.render() # Phương thức render() sẽ kiểm tra đăng nhập trước khi chạy _render_content()
+    elif stage == 'loaded' and st.session_state.df_preview is not None:
+        display_data_summary_and_preview(st.session_state.df_preview, st.session_state.params)
+        display_export_buttons()
+    elif stage == 'exporting_full':
+        with st.spinner("Exporting full data..."):
+            data_manager = DataManager(DATA_SOURCE_KEY)
+            full_df = data_manager.get_data(st.session_state.params)
+            csv_data = convert_df_to_csv(full_df)
+            st.session_state.download_info = {"data": csv_data, "file_name": f"{DATA_SOURCE_KEY}.csv"}
+            st.session_state.stage = 'download_ready'
+        st.rerun()
+    elif stage == 'download_ready':
+        display_download_section()

@@ -1,14 +1,19 @@
 from pathlib import Path
+import streamlit as st
 
 def _get_query_from_file(file_path: str) -> str:
     """Helper function to read SQL file safely."""
-    # Xây dựng đường dẫn an toàn đến thư mục 'sql'
-    path = Path(__file__).parent / "sql" / file_path
     try:
+        # Xây dựng đường dẫn tuyệt đối từ file hiện tại để đảm bảo luôn đúng
+        path = Path(__file__).resolve().parent.parent / "sql" / file_path
+        if not path.is_file():
+            raise FileNotFoundError(f"SQL file not found at the constructed path: {path}")
+        
         with open(path, 'r', encoding='utf-8') as f:
             return f.read()
-    except FileNotFoundError:
-        # Nếu không tìm thấy tệp, trả về chuỗi rỗng và không gây lỗi
+    except FileNotFoundError as e:
+        # Hiển thị lỗi ngay trên giao diện để dễ dàng debug
+        st.error(f"Fatal Error: Could not read a critical SQL file. Details: {e}")
         return "" 
 
 query_params = {

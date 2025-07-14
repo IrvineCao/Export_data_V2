@@ -1,91 +1,119 @@
+# utils/managers.py
 import streamlit as st
 import pandas as pd
 from sqlalchemy import text
-from .database import DatabaseManager # <-- Sửa lại thành relative import cho gọn
+from sqlalchemy.exc import OperationalError, ProgrammingError
+from utils.database import DatabaseManager # Đảm bảo bạn có file này
 from data_logic import kwl_data, kw_pfm_data, product_tracking_data
 
-class SessionManager:
-    """
-    Quản lý st.session_state một cách có cấu trúc.
-    Tất cả các phương thức đều là static để có thể gọi trực tiếp từ lớp.
-    """
-    @staticmethod
-    def initialize():
-        """Khởi tạo các giá trị cần thiết trong session state nếu chúng chưa tồn tại."""
-        defaults = {
-            'stage': 'initial',
-            'df_preview': None,
-            'params': {},
-            'username': None
-        }
-        for key, value in defaults.items():
-            if key not in st.session_state:
-                st.session_state[key] = value
 
-    @staticmethod
-    def get(key, default=None):
-        """Lấy một giá trị từ session state."""
-        return st.session_state.get(key, default)
+class ValidationManager:
+    """Chịu trách nhiệm xác thực tất cả các đầu vào của người dùng."""
+    def __init__(self, workspace_id, storefront_input, start_date, end_date):
+        self.workspace_id = workspace_id
+        self.storefront_input = storefront_input
+        self.start_date = start_date
+        self.end_date = end_date
+        self.errors = []
 
-    @staticmethod
-    def set(key, value):
-        """Gán một giá trị vào session state."""
-        st.session_state[key] = value
+    def validate(self):
+        self._validate_workspace()
+        self._validate_storefronts()
+        self._validate_dates()
+        return self.errors
 
-    @staticmethod
-    def clear_export_state():
-        """
-        Reset các state liên quan đến quy trình export.
-        ✅ ĐÚNG: Phương thức này không nhận bất kỳ tham số nào.
-        """
-        st.session_state['stage'] = 'initial'
-        st.session_state['df_preview'] = None
-        st.session_state['params'] = {}
+    def _validate_workspace(self):
+        workspace_id_list = [s.strip() for s in self.workspace_id.split(",") if s.strip()]
+        if not workspace_id_list:
+            self.errors.append("Workspace ID is required")
+        elif len(workspace_id_list) > 1:
+            self.errors.append("You can only enter one workspace ID.")
+        elif not all(s.isdigit() for s in workspace_id_list):
+            self.errors.append("Workspace ID must be numeric.")
+
+    def _validate_storefronts(self):
+        storefront_input_list = [s.strip() for s in self.storefront_input.split(",") if s.strip()]
+        if not storefront_input_list:
+            self.errors.append("Storefront EID is required")
+        elif len(storefront_input_list) > 5:
+            self.errors.append("You can only enter up to 5 storefront IDs.")
+        elif not all(s.isdigit() for s in storefront_input_list):
+            self.errors.append("Storefront EID must be numeric.")
+    
+    def _validate_dates(self):
+        if self.start_date > self.end_date:
+            self.errors.append("Start date cannot be after end date.")
+        else:
+            ids = [s.strip() for s in self.storefront_input.split(',') if s.strip()]
+            num_storefronts = len(ids)
+            date_range_days = (self.end_date - self.start_date).days
+            max_days_allowed = 60 if num_storefronts <= 2 else 30
+            if date_range_days > max_days_allowed:
+                self.errors.append(f"With {num_storefronts} storefront(s), the max period is {max_days_allowed} days.")
 
 class DataManager:
-    """Chịu trách nhiệm xử lý logic lấy và xử lý dữ liệu."""
-    def __init__(self):
+    """Chịu trách nhiệm cho tất cả các hoạt động truy vấn CSDL."""
+    QUERY_MAP = {'kwl': kwl_data.get_query, 'kw_pfm': kw_pfm_data.get_query, 'pt': product_tracking_data.get_query}
+
+    def __init__(self, data_source: str):
+        self.data_source = data_source
         self.db_manager = DatabaseManager()
-        self.query_map = {
-            'kwl': kwl_data.get_query,
-            'kw_pfm': kw_pfm_data.get_query,
-            'pt': product_tracking_data.get_query,
-        }
+        if data_source not in self.QUERY_MAP: raise ValueError(f"Unknown data source: {data_source}")
+        self.get_query_func = self.QUERY_MAP[data_source]
 
-    # ... (Các phương thức còn lại của DataManager giữ nguyên) ...
-    def _get_query_string(self, data_source: str, query_type: str) -> str:
-        get_query_func = self.query_map.get(data_source)
-        if not get_query_func:
-            raise ValueError(f"Nguồn dữ liệu không hợp lệ: {data_source}")
-        return get_query_func(query_type)
+    def _fetch(self, query_type: str, params: dict, limit: int = None):
+        query_str = self.get_query_func(query_type)
+        if not query_str or not query_str.strip(): raise FileNotFoundError(f"SQL query for '{self.data_source}' ('{query_type}') is empty.")
+        if limit: query_str += f" LIMIT {int(limit)}"
+        with self.db_manager.get_session() as db:
+            return pd.read_sql(text(query_str), db.connection(), params=params)
 
-    def fetch_data(self, query_type: str, data_source: str, limit: int = None, **kwargs):
-        """Thực hiện truy vấn và trả về DataFrame."""
-        query_str = self._get_query_string(data_source, query_type)
-        params_to_bind = kwargs.copy()
+    def get_count(self, params: dict):
+        count_df = self._fetch('count', params)
+        return count_df.iloc[0, 0] if not count_df.empty else 0
 
-        if 'storefront_ids' in params_to_bind:
-            ids = params_to_bind['storefront_ids']
-            if not ids: # Xử lý trường hợp list rỗng
-                return pd.DataFrame()
-            ids_string = str(tuple(ids)) if len(ids) > 1 else f"('{ids[0]}')"
-            query_str = query_str.replace(':storefront_ids', ids_string)
-            del params_to_bind['storefront_ids']
+    def get_data(self, params: dict, limit: int = None):
+        return self._fetch('data', params, limit=limit)
 
-        if limit and query_type == 'data':
-            query_str += f" LIMIT {limit}"
+class ExportProcessManager:
+    """Điều phối toàn bộ quy trình từ input đến khi sẵn sàng export."""
+    def __init__(self, data_source: str, inputs: dict):
+        self.data_source = data_source
+        self.inputs = inputs
+        self.params = {}
 
+    def run(self):
+        validator = ValidationManager(self.inputs.get('workspace_id'), self.inputs.get('storefront_input'), self.inputs.get('start_date'), self.inputs.get('end_date'))
+        errors = validator.validate()
+        if errors:
+            st.session_state.user_message = {"type": "error", "text": "\n\n".join(errors)}
+            st.session_state.stage = 'initial'
+            return
+        self._build_params()
         try:
-            with self.db_manager.get_session() as db:
-                df = pd.read_sql(text(query_str), db.connection(), params=params_to_bind)
-                return df
-        except Exception as e:
-            st.error(f"Lỗi khi truy vấn dữ liệu: {e}")
-            return pd.DataFrame()
+            with st.spinner("Checking data size..."):
+                data_manager = DataManager(self.data_source)
+                num_row = data_manager.get_count(self.params)
+                st.session_state.params['num_row'] = num_row
+            if num_row == 0:
+                st.session_state.user_message = {"type": "warning", "text": "No data found."}
+                st.session_state.stage = 'initial'
+            elif num_row > 50000:
+                st.session_state.user_message = {"type": "error", "text": f"Data is too large ({num_row:,} rows)."}
+                st.session_state.stage = 'initial'
+            else:
+                st.session_state.stage = 'loading_preview'
+        except (OperationalError, ProgrammingError, Exception) as e:
+            st.session_state.user_message = {"type": "error", "text": "A technical error occurred. See Dev Log."}
+            st.session_state.stage = 'initial'
 
-    def count_rows(self, data_source: str, **kwargs) -> int:
-        """Đếm số dòng dữ liệu."""
-        count_df = self.fetch_data('count', data_source, **kwargs)
-        if not count_df.empty:
-            return count_df.iloc[0, 0]
-        return 0
+    def _build_params(self):
+        self.params = {
+            "workspace_id": int(self.inputs.get('workspace_id')),
+            "storefront_ids": [int(eid.strip()) for eid in self.inputs.get('storefront_input').split(',')],
+            "start_date": self.inputs.get('start_date').strftime('%Y-%m-%d'),
+            "end_date": self.inputs.get('end_date').strftime('%Y-%m-%d'),
+            "data_source": self.data_source,
+            **self.inputs.get('options', {})
+        }
+        st.session_state.params = self.params

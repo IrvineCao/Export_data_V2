@@ -1,119 +1,73 @@
+# pages/2_Digital_Shelf_Analytics.py
 import streamlit as st
-from pages.base_page import Page
+from utils.session import initialize_session
+from utils.managers import DataManager, ExportProcessManager
+from utils.ui import (
+    create_input_form, 
+    display_user_message, 
+    display_data_summary_and_preview,
+    display_export_buttons,
+    display_download_section
+)
 
-class DigitalShelfPage(Page):
-    """
-    Lớp "bộ điều khiển" cho trang Digital Shelf.
-    Quản lý nhiều tab, mỗi tab là một nguồn dữ liệu khác nhau.
-    """
-    def __init__(self):
-        super().__init__()
-        # Không cần self.DATA_SOURCE_KEY ở đây vì mỗi tab sẽ có key riêng.
+def convert_df_to_csv(df):
+    return df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
 
-    def _render_content(self):
-        """Dựng giao diện chính và các tab."""
-        st.set_page_config(page_title="Digital Shelf", layout="wide")
-        st.title("📈 Digital Shelf Analytics")
-        st.markdown("---")
+st.set_page_config(page_title="Digital Shelf Analytics", layout="wide")
+initialize_session()
 
-        tab1, tab2, tab3 = st.tabs(["Keyword Performance", "Product Tracking", "Competition Landscape"])
+st.title("📈 Digital Shelf Analytics")
 
-        # Tab 1: Keyword Performance
-        with tab1:
-            self._render_kw_performance_tab()
+display_user_message()
 
-        # Tab 2: Product Tracking
-        with tab2:
-            self._render_product_tracking_tab()
+tab1, tab2, tab3 = st.tabs(["Keyword Performance", "Product Tracking", "Competition Landscape"])
 
-        # Tab 3: Competition Landscape
-        with tab3:
-            st.header("Competition Landscape Data Export")
-            st.info("💡 Coming soon...")
-
-    def _render_kw_performance_tab(self):
-        """Dựng nội dung cho tab Keyword Performance."""
-        source_key = 'kw_pfm'
-        st.header("Keyword Performance Data Export")
-
-        # 1. Dựng UI: Gọi phương thức từ UIManager
-        workspace_id, storefront_input, start_date, end_date, pfm_options = self.ui_manager.create_input_form(
-            source_key=source_key,
-            show_kw_pfm_options=True
-        )
-
-        # 2. Xử lý tương tác: Gắn logic xử lý cho nút bấm của riêng tab này
-        if st.button("Preview KW Performance Data", key=f'preview_{source_key}'):
-            self._handle_preview_click(
-                workspace_id=workspace_id,
-                storefront_input=storefront_input,
-                start_date=start_date,
-                end_date=end_date,
-                data_source=source_key,
-                options=pfm_options
-            )
-
-        # 3. Hiển thị kết quả: Chỉ hiển thị nếu data_source trong state khớp với tab này
-        if self.session_manager.get('params', {}).get('data_source') == source_key:
-            self.ui_manager.display_data_exporter(self.data_manager)
-
-
-    def _render_product_tracking_tab(self):
-        """Dựng nội dung cho tab Product Tracking."""
-        source_key = 'pt'
-        st.header("Product Tracking Data Export")
-
-        # 1. Dựng UI
-        workspace_id, storefront_input, start_date, end_date, _ = self.ui_manager.create_input_form(
-            source_key=source_key
-        )
-
-        # 2. Xử lý tương tác
-        if st.button("Preview Product Tracking Data", key=f'preview_{source_key}'):
-            self._handle_preview_click(
-                workspace_id=workspace_id,
-                storefront_input=storefront_input,
-                start_date=start_date,
-                end_date=end_date,
-                data_source=source_key
-            )
-
-        # 3. Hiển thị kết quả
-        if self.session_manager.get('params', {}).get('data_source') == source_key:
-            self.ui_manager.display_data_exporter(self.data_manager)
-
-
-    def _handle_preview_click(self, workspace_id, storefront_input, start_date, end_date, data_source, options=None):
-        """
-        Phương thức xử lý chung cho CẢ HAI nút bấm.
-        Nó nhận data_source để biết request đến từ tab nào.
-        """
-        self.session_manager.clear_export_state()
-
-        if not all([workspace_id, storefront_input, start_date, end_date]):
-            st.error("Vui lòng điền đầy đủ tất cả các trường.")
-            return
-
-        storefront_list = [eid.strip() for eid in storefront_input.split(',')]
-        params = {
-            "ws_id": workspace_id,
-            "storefront_ids": storefront_list,
-            "start_date": start_date.strftime("%Y-%m-%d"),
-            "end_date": end_date.strftime("%Y-%m-%d"),
-            "data_source": data_source  # <-- Sử dụng data_source được truyền vào
-        }
-        
-        # Thêm các options đặc biệt nếu có (từ tab kw_pfm)
-        if options:
-            params.update(options)
-
-        log_activity("PREVIEW_DATA", details=f"Source: {data_source.upper()}, Params: {params}")
-
-        self.session_manager.set('params', params)
-        self.session_manager.set('stage', 'loading_preview')
+with tab1:
+    st.header("Keyword Performance Data Export")
+    DATA_SOURCE_KEY = 'kw_pfm'
+    workspace_id, sf_input, s_date, e_date, pfm_opts = create_input_form(source_key=DATA_SOURCE_KEY, show_kw_pfm_options=True)
+    if st.button("Get Keyword Performance Data", key=f'get_data_{DATA_SOURCE_KEY}'):
+        if st.session_state.params.get('data_source') != DATA_SOURCE_KEY: st.session_state.stage = 'initial'
+        inputs = {"workspace_id": workspace_id, "storefront_input": sf_input, "start_date": s_date, "end_date": e_date, "options": pfm_opts}
+        process = ExportProcessManager(DATA_SOURCE_KEY, inputs)
+        process.run()
         st.rerun()
 
-# --- Entry Point của trang ---
-if __name__ == "__main__":
-    page = DigitalShelfPage()
-    page.render()
+with tab2:
+    st.header("Product Tracking Data Export")
+    DATA_SOURCE_KEY = 'pt'
+    workspace_id, sf_input, s_date, e_date, _ = create_input_form(source_key=DATA_SOURCE_KEY)
+    if st.button("Get Product Tracking Data", key=f'get_data_{DATA_SOURCE_KEY}'):
+        if st.session_state.params.get('data_source') != DATA_SOURCE_KEY: st.session_state.stage = 'initial'
+        inputs = {"workspace_id": workspace_id, "storefront_input": sf_input, "start_date": s_date, "end_date": e_date}
+        process = ExportProcessManager(DATA_SOURCE_KEY, inputs)
+        process.run()
+        st.rerun()
+
+with tab3:
+    st.header("Competition Landscape")
+    st.info("💡 Coming soon...")
+
+current_data_source = st.session_state.params.get('data_source')
+if current_data_source in ['kw_pfm', 'pt']:
+    stage = st.session_state.get('stage', 'initial')
+    if stage == 'loading_preview':
+        with st.spinner("Loading preview..."):
+            data_manager = DataManager(current_data_source)
+            df_preview = data_manager.get_data(st.session_state.params, limit=500)
+            st.session_state.df_preview = df_preview
+            st.session_state.stage = 'loaded'
+        st.rerun()
+    elif stage == 'loaded' and st.session_state.df_preview is not None:
+        display_data_summary_and_preview(st.session_state.df_preview, st.session_state.params)
+        display_export_buttons()
+    elif stage == 'exporting_full':
+        with st.spinner("Exporting full data..."):
+            data_manager = DataManager(current_data_source)
+            full_df = data_manager.get_data(st.session_state.params)
+            csv_data = convert_df_to_csv(full_df)
+            st.session_state.download_info = {"data": csv_data, "file_name": f"{current_data_source}.csv"}
+            st.session_state.stage = 'download_ready'
+        st.rerun()
+    elif stage == 'download_ready':
+        display_download_section()
